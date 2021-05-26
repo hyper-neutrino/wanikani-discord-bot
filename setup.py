@@ -27,7 +27,10 @@ config = {
   },
   "user-settings": {
     
-  }
+  },
+  "channels": [
+  
+  ]
 }
 
 print("Saving file...")
