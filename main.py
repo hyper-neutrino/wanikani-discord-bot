@@ -227,6 +227,7 @@ $help            - display this message
 ```""".replace("$", prefix)))
 
 async def update(channel, manual = False):
+  now = datetime.datetime.utcnow().timestamp()
   review_now = []
   lesson_now = []
   review_fcs = []
@@ -252,7 +253,7 @@ async def update(channel, manual = False):
         review_frcst = 0
         for block in data["reviews"]:
           timestamp = datetime.datetime.fromisoformat(block["available_at"][:-1]).timestamp()
-          if timestamp <= time.time():
+          if timestamp <= now:
             review_count += len(block["subject_ids"])
           elif timestamp == review_timer:
             review_frcst += len(block["subject_ids"])
@@ -263,7 +264,7 @@ async def update(channel, manual = False):
         if lesson_count:
           lesson_now.append(f"{member.mention} - {lesson_count}")
         if review_frcst:
-          dh, dm = divmod(int((review_timer - time.time()) // 60), 60)
+          dh, dm = divmod(int((review_timer - now) // 60), 60)
           review_fcs.append(f"{member.mention} - {review_frcst} at {(datetime.datetime.fromtimestamp(review_timer) + td).strftime('%H:%M')} (in {dh:0>2}:{dm:0>2})")
   if not manual and review_now + lesson_now + review_fcs == []:
     return
