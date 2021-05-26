@@ -339,7 +339,7 @@ async def stalk_cycle():
         if post_lessons | post_reviews:
           await ch.send(embed = discord.Embed(
             title = "Assignment Stalker",
-            description = "\n".join("\n".join(f"<@{m}> finished their {x}." for m in y) for x, y in [["lessons", post_lessons], ["reviews", post_reviews]])
+            description = "\n".join(english_list(f"<@{m}>" for m in y) + " finished their {x}." for x, y in [["lessons", post_lessons], ["reviews", post_reviews]])
           ))
       except:
         s = f"ERROR STALKING CHANNEL {cid}"
