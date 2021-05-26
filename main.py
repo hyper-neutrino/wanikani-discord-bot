@@ -75,7 +75,6 @@ class TTBClient(discord.Client):
   async def on_message(self, message):
     if message.author.id == client.user.id: return
     ss = server_settings(message.guild.id) if message.guild else None
-    ms = member_settings(message.author.id)
     prefix = ss["prefix"]
     async def reply(msg): return await send_embed(message.channel, msg)
     async def ensure_admin():
@@ -112,6 +111,7 @@ class TTBClient(discord.Client):
       save()
       await reply(f"My prefix in this server is now `{np}`")
     elif message.content.startswith(prefix + "timezone") or message.content.startswith(prefix + "tz"):
+      ms = member_settings(message.author.id)
       msg = lambda tz: f"(it is currently `{datetime.datetime.now(datetime.timezone(datetime.timedelta(hours = tz))).strftime('%H:%M:%S')}`)."
       tz = (message.content.split(" ", 1)[1:] or [""])[0]
       if tz == "":
@@ -150,6 +150,7 @@ class TTBClient(discord.Client):
       else:
         await reply("I am not currently sending hourly reports to this channel.")
     elif message.content.startswith(prefix + "include") or message.content.startswith(prefix + "exclude"):
+      ms = member_settings(message.author.id)
       cmd = message.content[len(prefix):][:7]
       if len(message.content.split(" ")) == 1 or not re.match(r"\d+(-\d+)?", message.content.split(" ")[1]):
         await reply(f"Syntax: `{prefix}{cmd} #` or `{prefix}{cmd} #-#`")
@@ -170,18 +171,22 @@ class TTBClient(discord.Client):
           save()
           await reply("Updated your reminder hours:\n\n```00 01 02 03 04 05 06 07 08 09 10 11\n%s\n12 13 14 15 16 17 18 19 20 21 22 23\n%s\n```" % tuple("  ".join("*" if h in ms["hours"] else " " for h in  x) for x in [range(12), range(12, 24)]))
     elif message.content.startswith(prefix + "hours"):
+      ms = member_settings(message.author.id)
       await reply("Your current reminder hours are:\n\n```00 01 02 03 04 05 06 07 08 09 10 11\n%s\n12 13 14 15 16 17 18 19 20 21 22 23\n%s\n```" % tuple("  ".join("*" if h in ms["hours"] else " " for h in  x) for x in [range(12), range(12, 24)]))
     elif message.content == prefix + "ping":
+      ms = member_settings(message.author.id)
       if message.channel.id not in ms["ping"]:
         ms["ping"].append(message.channel.id)
         save()
       await reply("I will now ping you when I post hourly reports to this channel.")
     elif message.content == prefix + "noping":
+      ms = member_settings(message.author.id)
       if message.channel.id in ms["ping"]:
         ms["ping"].remove(message.channel.id)
         save()
       await reply("I will no longer ping you when I post hourly reports to this channel.")
     elif message.content.startswith(prefix + "token"):
+      ms = member_settings(message.author.id)
       if len(message.content.split(" ")) == 1 or not re.match("", message.content.split(" ")[1]):
         await reply(f"Syntax: `{prefix}token xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`")
       else:
@@ -193,14 +198,17 @@ class TTBClient(discord.Client):
           pass
         await (await reply(f"Saved your API token. It is good practice to use a different token for every application. Use `{prefix}purgetoken` to remove your token.")).delete(delay = 6)
     elif message.content.startswith(prefix + "purgetoken"):
+      ms = member_settings(message.author.id)
       ms["token"] = ""
       save()
       await reply("Purged your API token. It is still recommended to expire your token if you do not trust this application.")
     elif message.content == prefix + "pause":
+      ms = member_settings(message.author.id)
       ms["pause"] = True
       save()
       await reply("Paused notifications for you in all places.")
     elif message.content == prefix + "resume":
+      ms = member_settings(message.author.id)
       ms["pause"] = False
       save()
       await reply("Resumed your notifications.")
@@ -234,13 +242,14 @@ async def update(channel, manual = False):
   review_fcs = []
   pings = []
   for member in channel.members:
+    if str(member.id) not in config["user-settings"]: continue
     ms = member_settings(member.id)
     if ms["token"]:
       await update_member(member)
       if member.id not in ram: continue
       lesson_count, review_timer, review_count, review_frcst = ram[member.id]
       td = datetime.timedelta(hours = ms["timezone"] if ms["timezone"] is not None else config["default-tz"])
-      if not manual and not ms["pause"] and channel.id in ms["ping"] and (lesson_count + review_count > 0) and (datetime.datetime.utcnow() + td).hour in ms["hours"]:
+      if not manual and not ms["pause"] and channel.id in ms["ping"] and (lesson_count + review_count) > 0 and (datetime.datetime.utcnow() + td).hour in ms["hours"]:
         pings.append(member)
       if review_count:
         review_now.append(f"{member.mention} - {review_count}")
@@ -278,9 +287,10 @@ async def update_member(member):
     if member.id in ram:
       del ram[member.id]
     try:
-      if member.dm_channel is None:
-        await member.create_dm()
-      await member.dm_channel.send("Fetching your WaniKani data failed. I have removed your token for now. Please make sure your token is valid and that you did not expire it, and re-enter a token (it can be the same one as before). If this issue persists, please contact HyperNeutrino#9467.")
+      print(f"Fetch failed for {member}. Not DMing right now to avoid issues with spam.")
+#       if member.dm_channel is None:
+#         await member.create_dm()
+#       await member.dm_channel.send("Fetching your WaniKani data failed. I have removed your token for now. Please make sure your token is valid and that you did not expire it, and re-enter a token (it can be the same one as before). If this issue persists, please contact HyperNeutrino#9467.")
     except:
       print(f"Cannot contact user {member}. Their token failed and was removed.")
   else:
@@ -321,6 +331,7 @@ async def stalk_cycle():
       try:
         ch = client.get_channel(cid)
         for member in ch.members:
+          if str(member.id) not in config["user-settings"]: continue
           ms = member_settings(member.id)
           if not ms["token"]: continue
           if member.id in seen: continue
@@ -339,7 +350,7 @@ async def stalk_cycle():
         if post_lessons | post_reviews:
           await ch.send(embed = discord.Embed(
             title = "Assignment Stalker",
-            description = "\n".join(english_list(f"<@{m}>" for m in y) + " finished their {x}." for x, y in [["lessons", post_lessons], ["reviews", post_reviews]])
+            description = "\n".join(english_list(f"<@{m}>" for m in y) + f" finished their {x}." for x, y in [["lessons", post_lessons], ["reviews", post_reviews]] if y)
           ))
       except:
         s = f"ERROR STALKING CHANNEL {cid}"
