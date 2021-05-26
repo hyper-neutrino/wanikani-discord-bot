@@ -2,6 +2,7 @@ import asyncio, datetime, discord, json, re, requests, time, traceback
 
 config = {}
 ram = {}
+last = {}
 
 def load():
   global config
@@ -100,6 +101,12 @@ class TTBClient(discord.Client):
           await reply("Please enter an integer between -12 and 14.")
       else:
         await reply("This command is limited to the bot owner.")
+    elif message.content == prefix + "purge-all":
+      if await ensure_admin(): return
+      async for msg in message.channel.history(limit = None):
+        if msg.author == client.user:
+          await msg.delete()
+      await (await reply("Done!")).delete(delay = 3)
     elif message.content.startswith(prefix + "prefix"):
       if await ensure_admin(): return
       arguments = message.content.split()
@@ -256,7 +263,7 @@ async def update(channel, manual = False):
       if lesson_count:
         lesson_now.append(f"{member.mention} - {lesson_count}")
       if review_frcst:
-        dh, dm = divmod(int((review_timer - now) // 60 + 0.5), 60)
+        dh, dm = divmod(int((review_timer - now) / 60 + 0.5), 60)
         review_fcs.append(f"{member.mention} - {review_frcst} at {(datetime.datetime.fromtimestamp(review_timer) + td).strftime('%H:%M')} (in {dh:0>2}:{dm:0>2})")
   if not manual and review_now + lesson_now + review_fcs == []:
     return
@@ -273,7 +280,10 @@ async def update(channel, manual = False):
     anystuff = True
   if not anystuff:
     embed.add_field(name = "Nothing to see here...", value = "There are no members in this channel who have any lessons or reviews available or reviews in the next 24 hours.")
-  await channel.send(" ".join(member.mention for member in pings), embed = embed)
+  async for msg in channel.history(limit = 1):
+    if msg.id == last.get(channel.id) and not manual and not pings:
+      return
+  last[channel.id] = (await channel.send(" ".join(member.mention for member in pings), embed = embed)).id
 
 async def update_member(member):
   now = datetime.datetime.utcnow().timestamp()
@@ -296,7 +306,7 @@ async def update_member(member):
   else:
     data = res.json()["data"]
     lesson_count = sum(len(block["subject_ids"]) for block in data["lessons"])
-    review_timer = datetime.datetime.fromisoformat(data["next_reviews_at"][:-1]).timestamp() if data["next_reviews_at"] else 0
+    review_timer = min([x for x in [datetime.datetime.fromisoformat(block["available_at"][:-1]).timestamp() for block in data["reviews"] if block["subject_ids"]] if x > now], default = 0)
     review_count = 0
     review_frcst = 0
     for block in data["reviews"]:
