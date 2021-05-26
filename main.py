@@ -264,7 +264,7 @@ async def update(channel, manual = False):
         if lesson_count:
           lesson_now.append(f"{member.mention} - {lesson_count}")
         if review_frcst:
-          dh, dm = divmod(int((review_timer - now) // 60), 60)
+          dh, dm = divmod(int((review_timer - now) // 60 + 0.5), 60)
           review_fcs.append(f"{member.mention} - {review_frcst} at {(datetime.datetime.fromtimestamp(review_timer) + td).strftime('%H:%M')} (in {dh:0>2}:{dm:0>2})")
   if not manual and review_now + lesson_now + review_fcs == []:
     return
