@@ -27,7 +27,7 @@ def member_settings(mid):
     config["user-settings"][mid] = {}
   settings = config["user-settings"][mid]
   if "timezone" not in settings:
-    settings["timezone"] = -4
+    settings["timezone"] = None
   if "hours" not in settings:
     settings["hours"] = list(range(24))
   if "ping" not in settings:
@@ -89,6 +89,17 @@ class TTBClient(discord.Client):
         raise SystemExit
       else:
         await reply("This command is limited to the bot owner.")
+    elif message.content.startswith("wk.default-tz"):
+      if is_owner(message.author):
+        try:
+          tz = int(message.content.split(" ")[1])
+          if tz < -12 or tz > 14: raise RuntimeError
+          config["default-tz"] = tz
+          await reply("Set the default tiemzone for this bot.")
+        except:
+          await reply("Please enter an integer between -12 and 14.")
+      else:
+        await reply("This command is limited to the bot owner.")
     elif message.content.startswith(prefix + "prefix"):
       if await ensure_admin(): return
       arguments = message.content.split()
@@ -104,7 +115,13 @@ class TTBClient(discord.Client):
       tz = (message.content.split(" ", 1)[1:] or [""])[0]
       if tz == "":
         tz = ms["timezone"]
+        if tz is None:
+          tz = config["default-tz"]
         await reply("Your timezone is `UTC" + "+" * (tz >= 0) + str(tz).zfill(2) + ":00` " + msg(tz))
+      elif tz == "-":
+        ms["timezone"] = None
+        save()
+        await reply("Your timezone has been unset and you are now using the default timezone of `UTC" + "+" * (config["default-tz"] >= 0) + str(config["default-tz"]).zfill(2) + ":00` " + msg(config["default-tz"]))
       else:
         try:
           tz = int(tz)
@@ -216,7 +233,7 @@ async def update(channel, manual = False):
   pings = []
   for member in channel.members:
     ms = member_settings(member.id)
-    td = datetime.timedelta(hours = ms["timezone"])
+    td = datetime.timedelta(hours = ms["timezone"] if ms["timezone"] is not None else config["default-tz"])
     if ms["token"]:
       res = requests.get("https://api.wanikani.com/v2/summary", headers = {
         "Authorization": f"Bearer {ms['token']}"

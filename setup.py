@@ -17,11 +17,24 @@ while True:
     continue
   break
 
+print()
+print("Please enter the default timezone as the offset in hours from UTC (between -12 and 14). Users who don't set their timezone will have this, and changing the default timezone will apply to them.")
+while True:
+  tz = input("tz> ")
+  try:
+    tz = int(tz)
+    if tz < -12 or tz > 14:
+      raise RuntimeError
+  except:
+    continue
+  break
+
 print("Generating config.json...")
 
 config = {
   "discord-token": token,
   "owner": owner,
+  "default-tz": tz,
   "server-settings": {
     
   },
