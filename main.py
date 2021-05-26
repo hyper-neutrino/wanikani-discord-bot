@@ -1,6 +1,7 @@
 import asyncio, datetime, discord, json, re, requests, time, traceback
 
 config = {}
+ram = {}
 
 def load():
   global config
@@ -234,38 +235,20 @@ async def update(channel, manual = False):
   pings = []
   for member in channel.members:
     ms = member_settings(member.id)
-    td = datetime.timedelta(hours = ms["timezone"] if ms["timezone"] is not None else config["default-tz"])
     if ms["token"]:
-      res = requests.get("https://api.wanikani.com/v2/summary", headers = {
-        "Authorization": f"Bearer {ms['token']}"
-      })
-      if res.status_code != 200:
-        if member.dm_channel is None:
-          await member.create_dm()
-        ms["token"] = ""
-        save()
-        await member.dm_channel.send("Fetching your WaniKani data failed. I have removed your token for now. Please make sure your token is valid and that you did not expire it, and re-enter a token (it can be the same one as before). If this issue persists, please contact HyperNeutrino#9467.")
-      else:
-        data = res.json()["data"]
-        lesson_count = sum(len(block["subject_ids"]) for block in data["lessons"])
-        review_timer = datetime.datetime.fromisoformat(data["next_reviews_at"][:-1]).timestamp() if data["next_reviews_at"] else 0
-        review_count = 0
-        review_frcst = 0
-        for block in data["reviews"]:
-          timestamp = datetime.datetime.fromisoformat(block["available_at"][:-1]).timestamp()
-          if timestamp <= now:
-            review_count += len(block["subject_ids"])
-          elif timestamp == review_timer:
-            review_frcst += len(block["subject_ids"])
-        if not manual and not ms["pause"] and channel.id in ms["ping"] and (lesson_count + review_count > 0) and (datetime.datetime.utcnow() + td).hour in ms["hours"]:
-          pings.append(member)
-        if review_count:
-          review_now.append(f"{member.mention} - {review_count}")
-        if lesson_count:
-          lesson_now.append(f"{member.mention} - {lesson_count}")
-        if review_frcst:
-          dh, dm = divmod(int((review_timer - now) // 60 + 0.5), 60)
-          review_fcs.append(f"{member.mention} - {review_frcst} at {(datetime.datetime.fromtimestamp(review_timer) + td).strftime('%H:%M')} (in {dh:0>2}:{dm:0>2})")
+      await update_member(member)
+      if member.id not in ram: continue
+      lesson_count, review_timer, review_count, review_frcst = ram[member.id]
+      td = datetime.timedelta(hours = ms["timezone"] if ms["timezone"] is not None else config["default-tz"])
+      if not manual and not ms["pause"] and channel.id in ms["ping"] and (lesson_count + review_count > 0) and (datetime.datetime.utcnow() + td).hour in ms["hours"]:
+        pings.append(member)
+      if review_count:
+        review_now.append(f"{member.mention} - {review_count}")
+      if lesson_count:
+        lesson_now.append(f"{member.mention} - {lesson_count}")
+      if review_frcst:
+        dh, dm = divmod(int((review_timer - now) // 60 + 0.5), 60)
+        review_fcs.append(f"{member.mention} - {review_frcst} at {(datetime.datetime.fromtimestamp(review_timer) + td).strftime('%H:%M')} (in {dh:0>2}:{dm:0>2})")
   if not manual and review_now + lesson_now + review_fcs == []:
     return
   embed = discord.Embed(title = "Manual Report" if manual else "Hourly Report")
@@ -283,6 +266,37 @@ async def update(channel, manual = False):
     embed.add_field(name = "Nothing to see here...", value = "There are no members in this channel who have any lessons or reviews available or reviews in the next 24 hours.")
   await channel.send(" ".join(member.mention for member in pings), embed = embed)
 
+async def update_member(member):
+  now = datetime.datetime.utcnow().timestamp()
+  ms = member_settings(member.id)
+  res = requests.get("https://api.wanikani.com/v2/summary", headers = {
+    "Authorization": f"Bearer {ms['token']}"
+  })
+  if res.status_code != 200:
+    ms["token"] = ""
+    save()
+    if member.id in ram:
+      del ram[member.id]
+    try:
+      if member.dm_channel is None:
+        await member.create_dm()
+      await member.dm_channel.send("Fetching your WaniKani data failed. I have removed your token for now. Please make sure your token is valid and that you did not expire it, and re-enter a token (it can be the same one as before). If this issue persists, please contact HyperNeutrino#9467.")
+    except:
+      print(f"Cannot contact user {member}. Their token failed and was removed.")
+  else:
+    data = res.json()["data"]
+    lesson_count = sum(len(block["subject_ids"]) for block in data["lessons"])
+    review_timer = datetime.datetime.fromisoformat(data["next_reviews_at"][:-1]).timestamp() if data["next_reviews_at"] else 0
+    review_count = 0
+    review_frcst = 0
+    for block in data["reviews"]:
+      timestamp = datetime.datetime.fromisoformat(block["available_at"][:-1]).timestamp()
+      if timestamp <= now:
+        review_count += len(block["subject_ids"])
+      elif timestamp == review_timer:
+        review_frcst += len(block["subject_ids"])
+    ram[member.id] = (lesson_count, review_timer, review_count, review_frcst)
+
 async def reminder_cycle():
   while True:
     await asyncio.sleep(-time.time() % 3600)
@@ -297,6 +311,54 @@ async def reminder_cycle():
         print("^" * len(s))
     await asyncio.sleep(10)
 
+async def stalk_cycle():
+  while True:
+    await asyncio.sleep(10)
+    seen = set()
+    lesson_creep = set()
+    review_creep = set()
+    for cid in config["channels"]:
+      try:
+        ch = client.get_channel(cid)
+        for member in ch.members:
+          ms = member_settings(member.id)
+          if not ms["token"]: continue
+          if member.id in seen: continue
+          seen.add(member.id)
+          lc, _, rc, _ = ram.get(member.id, (0, 0, 0, 0))
+          await update_member(member)
+          if member.id in ram:
+            nlc, _, nrc, _ = ram[member.id]
+            if lc and not nlc:
+              lesson_creep.add(member.id)
+            if rc and not nrc:
+              review_creep.add(member.id)
+        ids = {member.id for member in ch.members}
+        post_lessons = lesson_creep & ids
+        post_reviews = review_creep & ids
+        if post_lessons | post_reviews:
+          await ch.send(embed = discord.Embed(
+            title = "Assignment Stalker",
+            description = "\n".join("\n".join(f"<@{m}> finished their {x}." for m in y) for x, y in [["lessons", post_lessons], ["reviews", post_reviews]])
+          ))
+      except:
+        s = f"ERROR STALKING CHANNEL {cid}"
+        print(s)
+        print("v" * len(s))
+        traceback.print_exc()
+        print("^" * len(s))
+      
+def english_list(x):
+  x = list(map(str, x))
+  if len(x) == 0:
+    return "[]"
+  elif len(x) == 1:
+    return x[0]
+  elif len(x) == 2:
+    return x[0] + " and " + x[1]
+  else:
+    return ", ".join(x[:-1]) + ", and " + x[-1]
+
 if __name__ == "__main__":
   load()
 
@@ -304,5 +366,6 @@ if __name__ == "__main__":
   
   asyncio.get_event_loop().run_until_complete(asyncio.gather(
     client.start(config["discord-token"]),
-    reminder_cycle()
+    reminder_cycle(),
+    stalk_cycle()
   ))
