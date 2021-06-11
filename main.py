@@ -4,6 +4,8 @@ config = {}
 ram = {}
 last = {}
 
+failbuffer = {}
+
 def load():
   global config
   with open("config.json", "r") as f:
@@ -76,7 +78,7 @@ class TTBClient(discord.Client):
   async def on_message(self, message):
     if message.author.id == client.user.id: return
     ss = server_settings(message.guild.id) if message.guild else None
-    prefix = ss["prefix"]
+    prefix = ss["prefix"] if ss else "wk."
     async def reply(msg): return await send_embed(message.channel, msg)
     async def ensure_admin():
       if not is_admin(message.author):
@@ -194,10 +196,10 @@ class TTBClient(discord.Client):
       await reply("I will no longer ping you when I post hourly reports to this channel.")
     elif message.content.startswith(prefix + "token"):
       ms = member_settings(message.author.id)
-      if len(message.content.split(" ")) == 1 or not re.match("", message.content.split(" ")[1]):
+      if len(message.content.split()) == 1 or not re.match("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", message.content.split()[1]):
         await reply(f"Syntax: `{prefix}token xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`")
       else:
-        ms["token"] = message.content.split(" ")[1]
+        ms["token"] = message.content.split()[1]
         save()
         try:
           await message.delete()
@@ -243,6 +245,7 @@ $help            - display this message
 ```""".replace("$", prefix)))
 
 async def update(channel, manual = False):
+  print(f"Updating {channel}...")
   now = datetime.datetime.utcnow().timestamp()
   review_now = []
   lesson_now = []
@@ -284,6 +287,7 @@ async def update(channel, manual = False):
     if msg.id == last.get(channel.id) and not manual and not pings:
       return
   last[channel.id] = (await channel.send(" ".join(member.mention for member in pings), embed = embed)).id
+  print("Success!")
 
 async def update_member(member):
   now = datetime.datetime.utcnow().timestamp()
@@ -292,18 +296,21 @@ async def update_member(member):
     "Authorization": f"Bearer {ms['token']}"
   })
   if res.status_code != 200:
-    ms["token"] = ""
-    save()
-    if member.id in ram:
-      del ram[member.id]
-    try:
-      print(f"Fetch failed for {member}. Not DMing right now to avoid issues with spam.")
-#       if member.dm_channel is None:
-#         await member.create_dm()
-#       await member.dm_channel.send("Fetching your WaniKani data failed. I have removed your token for now. Please make sure your token is valid and that you did not expire it, and re-enter a token (it can be the same one as before). If this issue persists, please contact HyperNeutrino#9467.")
-    except:
-      print(f"Cannot contact user {member}. Their token failed and was removed.")
+    failbuffer[member.id] = failbuffer.get(member.id, 0) + 1
+    if failbuffer[member.id] >= 5:
+      print(f"{member}: token failed 5 times and is removed.")
+      ms["token"] = ""
+      save()
+      if member.id in ram:
+        del ram[member.id]
+      try:
+        if member.dm_channel is None:
+          await member.create_dm()
+        await member.dm_channel.send(f"Fetching your WaniKani data failed 5 times in a row ({res.status_code}). I have removed your token for now. Please make sure your token is valid and that you did not expire it, and re-enter a token (it can be the same one as before). If WaniKani is up and this issue persists, please contact <@251082987360223233>.")
+      except:
+        print(f"Cannot contact user {member}. Their token failed and was removed.")
   else:
+    failbuffer[member.id] = 0
     data = res.json()["data"]
     lesson_count = sum(len(block["subject_ids"]) for block in data["lessons"])
     review_timer = min([x for x in [datetime.datetime.fromisoformat(block["available_at"][:-1]).timestamp() for block in data["reviews"] if block["subject_ids"]] if x > now], default = 0)
@@ -333,7 +340,7 @@ async def reminder_cycle():
 
 async def stalk_cycle():
   while True:
-    await asyncio.sleep(10)
+    await asyncio.sleep(2.5)
     seen = set()
     lesson_creep = set()
     review_creep = set()
@@ -354,6 +361,11 @@ async def stalk_cycle():
               lesson_creep.add(member.id)
             if rc and not nrc:
               review_creep.add(member.id)
+#             if nlc > lc:
+#               await ch.send(embed = discord.Embed(
+#                 title = "Assignment Stalker",
+#                 description = f"{member.mention} gained {nlc - lc} lesson{'s' * (nlc - lc != 1)}; they now have {nlc}."
+#               ))
         ids = {member.id for member in ch.members}
         post_lessons = lesson_creep & ids
         post_reviews = review_creep & ids
